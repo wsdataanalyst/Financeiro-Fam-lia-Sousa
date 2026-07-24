@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Financeiro Família Sousa</title>
+<meta name="description" content="Caderno de contas da família Sousa: despesas, salários, entradas extras e um robô que lê texto colado e classifica os lançamentos automaticamente." />
+<link rel="icon" href="data:,">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #EEF2EC; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useMemo, useCallback } from "https://esm.sh/react@18.3.1";
+import ReactDOM from "https://esm.sh/react-dom@18.3.1/client";
+import {
+  PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid, Legend,
+} from "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1";
+import {
+  Wallet, TrendingUp, TrendingDown, PlusCircle, Trash2, Tag, Users,
+  Gift, AlertTriangle, Lightbulb, LayoutDashboard, Receipt, ChevronLeft,
+  ChevronRight, CheckCircle2, X, Bot, Sparkles, ClipboardPaste,
+} from "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1";
+
+/* ---------------------------------------------------------------
+   TOKENS — ledger / caderno de contas da família
+--------------------------------------------------------------- */
+const C = {
+  bg: "#EEF2EC",
+  surface: "#FCFDF9",
+  surfaceAlt: "#E4EAE1",
+  ink: "#16231C",
+  inkMuted: "#5B6B60",
+  inkFaint: "#93A399",
+  line: "#D6DCCF",
+  primary: "#1F4B3F",
+  primaryDark: "#12302A",
+  accent: "#B8935B",
+  accentSoft: "#EFE3CD",
+  positive: "#2F7A54",
+  danger: "#B4432F",
+  dangerSoft: "#F3DCD5",
+};
+
+const DEFAULT_CATEGORIES = [
+  { id: "moradia", nome: "Moradia", cor: "#1F4B3F" },
+  { id: "alimentacao", nome: "Alimentação", cor: "#B8935B" },
+  { id: "transporte", nome: "Transporte", cor: "#4A6FA5" },
+  { id: "saude", nome: "Saúde", cor: "#B4432F" },
+  { id: "educacao", nome: "Educação", cor: "#7B4B94" },
+  { id: "lazer", nome: "Lazer", cor: "#2A9D8F" },
+  { id: "contas", nome: "Contas e Serviços", cor: "#6B6B62" },
+  { id: "outros", nome: "Outros", cor: "#8C6B4F" },
+];
+
+const PALETTE_CORES = [
+  "#1F4B3F", "#B8935B", "#4A6FA5", "#B4432F", "#7B4B94",
+  "#2A9D8F", "#6B6B62", "#8C6B4F", "#C25B8F", "#3D6B4F",
+];
+
+const STORAGE_KEY = "financeiro-familia-sousa:dados";
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+const hoje = new Date();
+const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+
+const MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+function rotuloMes(mesStr) {
+  const [ano, mes] = mesStr.split("-").map(Number);
+  return `${MESES_PT[mes - 1]}/${ano}`;
+}
+
+function mesAnterior(mesStr) {
+  const [ano, mes] = mesStr.split("-").map(Number);
+  const d = new Date(ano, mes - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatBRL(v) {
+  return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+/* ---------------------------------------------------------------
+   PERSISTÊNCIA
+--------------------------------------------------------------- */
+function useDados() {
+  const [dados, setDados] = useState({
+    categorias: DEFAULT_CATEGORIES,
+    despesas: [],
+    salarios: [],
+    extras: [],
+  });
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState(false);
+
+  // Os dados ficam salvos no navegador do dispositivo (localStorage).
+  // Cada aparelho/navegador tem seu próprio armazenamento local.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setDados({
+          categorias: parsed.categorias?.length ? parsed.categorias : DEFAULT_CATEGORIES,
+          despesas: parsed.despesas || [],
+          salarios: parsed.salarios || [],
+          extras: parsed.extras || [],
+        });
+      }
+    } catch (e) {
+      // dado corrompido ou inexistente — segue com estado padrão
+    } finally {
+      setCarregando(false);
+    }
+  }, []);
+
+  const persistir = useCallback((novosDados) => {
+    setDados(novosDados);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(novosDados));
+      setErro(false);
+    } catch (e) {
+      setErro(true);
+    }
+  }, []);
+
+  return { dados, persistir, carregando, erro };
+}
+
+/* ---------------------------------------------------------------
+   PRIMITIVOS DE UI
+--------------------------------------------------------------- */
+function Cartao({ children, style, className = "" }) {
+  return (
+    <div
+      className={`rounded-lg ${className}`}
+      style={{ background: C.surface, border: `1px solid ${C.line}`, ...style }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Rotulo({ children }) {
+  return (
+    <label
+      className="block text-xs font-semibold mb-1 tracking-wide uppercase"
+      style={{ color: C.inkMuted, fontFamily: "Inter, sans-serif" }}
+    >
+      {children}
+    </label>
+  );
+}
+
+const inputStyle = {
+  background: C.bg,
+  border: `1px solid ${C.line}`,
+  color: C.ink,
+  fontFamily: "Inter, sans-serif",
+};
+
+function Campo(props) {
+  return (
+    <input
+      {...props}
+      className={`w-full rounded-md px-3 py-2 text-sm outline-none focus:ring-2 ${props.className || ""}`}
+      style={{ ...inputStyle, ...(props.style || {}) }}
+      onFocus={(e) => (e.target.style.borderColor = C.primary)}
+      onBlur={(e) => (e.target.style.borderColor = C.line)}
+    />
+  );
+}
+
+function Selecao(props) {
+  return (
+    <select
+      {...props}
+      className={`w-full rounded-md px-3 py-2 text-sm outline-none ${props.className || ""}`}
+      style={{ ...inputStyle, ...(props.style || {}) }}
+    >
+      {props.children}
+    </select>
+  );
+}
+
+function Botao({ children, onClick, variant = "primary", type = "button", style, disabled }) {
+  const base = "inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition-opacity";
+  const styles = {
+    primary: { background: C.primary, color: "#F5F7F2" },
+    accent: { background: C.accent, color: "#2A2015" },
+    ghost: { background: "transparent", color: C.inkMuted, border: `1px solid ${C.line}` },
+    danger: { background: "transparent", color: C.danger },
+  };
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={`${base} ${disabled ? "opacity-50 cursor-not-allowed" : "hover:opacity-90"}`}
+      style={{ ...styles[variant], fontFamily: "Inter, sans-serif", ...style }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Numero({ valor, cor, tamanho = "text-lg" }) {
+  return (
+    <span
+      className={`${tamanho} font-semibold tabular-nums`}
+      style={{ fontFamily: "'IBM Plex Mono', monospace", color: cor || C.ink }}
+    >
+      {formatBRL(valor)}
+    </span>
+  );
+}
+
+function SeletorMes({ mes, setMes }) {
+  const mudar = (delta) => {
+    const [ano, m] = mes.split("-").map(Number);
+    const d = new Date(ano, m - 1 + delta, 1);
+    setMes(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+  return (
+    <div
+      className="flex items-center gap-2 rounded-md px-2 py-1.5"
+      style={{ background: C.surface, border: `1px solid ${C.line}` }}
+    >
+      <button onClick={() => mudar(-1)} className="p-1 rounded hover:opacity-70" style={{ color: C.inkMuted }}>
+        <ChevronLeft size={16} />
+      </button>
+      <span
+        className="text-sm font-semibold w-20 text-center tabular-nums"
+        style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink }}
+      >
+        {rotuloMes(mes)}
+      </span>
+      <button onClick={() => mudar(1)} className="p-1 rounded hover:opacity-70" style={{ color: C.inkMuted }}>
+        <ChevronRight size={16} />
+      </button>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   CÁLCULOS / INSIGHTS
+--------------------------------------------------------------- */
+function useCalculos(dados, mes) {
+  return useMemo(() => {
+    const despesasMes = dados.despesas.filter((d) => d.mes === mes);
+    const salariosMes = dados.salarios.filter((s) => s.mes === mes);
+    const extrasMes = dados.extras.filter((e) => e.mes === mes);
+
+    const totalDespesas = despesasMes.reduce((s, d) => s + Number(d.valor), 0);
+    const totalSalarios = salariosMes.reduce((s, d) => s + Number(d.valor), 0);
+    const totalExtras = extrasMes.reduce((s, d) => s + Number(d.valor), 0);
+    const totalReceitas = totalSalarios + totalExtras;
+    const saldo = totalReceitas - totalDespesas;
+
+    const porCategoria = dados.categorias
+      .map((cat) => {
+        const total = despesasMes
+          .filter((d) => d.categoriaId === cat.id)
+          .reduce((s, d) => s + Number(d.valor), 0);
+        return { ...cat, total };
+      })
+      .filter((c) => c.total > 0)
+      .sort((a, b) => b.total - a.total);
+
+    const maioresGastos = [...despesasMes].sort((a, b) => b.valor - a.valor).slice(0, 5);
+
+    const mesPassado = mesAnterior(mes);
+    const despesasMesPassado = dados.despesas.filter((d) => d.mes === mesPassado);
+    const totalDespesasMesPassado = despesasMesPassado.reduce((s, d) => s + Number(d.valor), 0);
+    const variacaoDespesas =
+      totalDespesasMesPassado > 0
+        ? ((totalDespesas - totalDespesasMesPassado) / totalDespesasMesPassado) * 100
+        : null;
+
+    // últimos 6 meses para o gráfico de evolução
+    const meses6 = [];
+    let cursor = mes;
+    for (let i = 0; i < 6; i++) {
+      meses6.unshift(cursor);
+      cursor = mesAnterior(cursor);
+    }
+    const evolucao = meses6.map((m) => {
+      const desp = dados.despesas.filter((d) => d.mes === m).reduce((s, d) => s + Number(d.valor), 0);
+      const rec =
+        dados.salarios.filter((s) => s.mes === m).reduce((s, d) => s + Number(d.valor), 0) +
+        dados.extras.filter((e) => e.mes === m).reduce((s, d) => s + Number(d.valor), 0);
+      return { mes: rotuloMes(m), Receitas: rec, Despesas: desp };
+    });
+
+    return {
+      despesasMes, salariosMes, extrasMes, totalDespesas, totalSalarios, totalExtras,
+      totalReceitas, saldo, porCategoria, maioresGastos, variacaoDespesas, evolucao,
+    };
+  }, [dados, mes]);
+}
+
+function gerarInsights(calc, mes) {
+  const insights = [];
+  const { totalReceitas, totalDespesas, saldo, porCategoria, variacaoDespesas } = calc;
+
+  if (totalReceitas === 0 && totalDespesas === 0) {
+    return [{
+      tipo: "info",
+      texto: "Ainda não há dados neste mês. Cadastre os salários e as primeiras contas para começar a ver os insights aqui.",
+    }];
+  }
+
+  if (saldo < 0) {
+    insights.push({
+      tipo: "alerta",
+      texto: `O mês está fechando no vermelho: as despesas superam as receitas em ${formatBRL(Math.abs(saldo))}. Plano de ação: revise os itens da categoria "${porCategoria[0]?.nome || "maior gasto"}" e corte pelo menos 10% dela até o fim do mês.`,
+    });
+  } else if (totalReceitas > 0 && saldo / totalReceitas < 0.1) {
+    insights.push({
+      tipo: "alerta",
+      texto: `A sobra do mês está apertada (${formatBRL(saldo)}, menos de 10% da receita). Plano de ação: crie uma meta de poupança mínima antes de gastar com itens não essenciais.`,
+    });
+  } else {
+    insights.push({
+      tipo: "positivo",
+      texto: `Boa! O mês fecha com saldo positivo de ${formatBRL(saldo)}. Plano de ação: considere direcionar parte desse valor para uma reserva de emergência da família.`,
+    });
+  }
+
+  if (porCategoria.length > 0) {
+    const top = porCategoria[0];
+    const pct = totalReceitas > 0 ? (top.total / totalReceitas) * 100 : 0;
+    if (pct > 35) {
+      insights.push({
+        tipo: "alerta",
+        texto: `"${top.nome}" concentra ${pct.toFixed(0)}% da receita do mês (${formatBRL(top.total)}). Plano de ação: negocie contratos, compare fornecedores ou defina um teto mensal para essa categoria.`,
+      });
+    } else {
+      insights.push({
+        tipo: "info",
+        texto: `A maior categoria de gasto é "${top.nome}", com ${formatBRL(top.total)} (${pct.toFixed(0)}% da receita).`,
+      });
+    }
+  }
+
+  if (variacaoDespesas !== null) {
+    if (variacaoDespesas > 15) {
+      insights.push({
+        tipo: "alerta",
+        texto: `As despesas subiram ${variacaoDespesas.toFixed(0)}% em relação ao mês passado. Plano de ação: identifique qual categoria puxou esse aumento e avalie se é um gasto pontual ou uma nova tendência.`,
+      });
+    } else if (variacaoDespesas < -10) {
+      insights.push({
+        tipo: "positivo",
+        texto: `As despesas caíram ${Math.abs(variacaoDespesas).toFixed(0)}% frente ao mês anterior. Continue com os hábitos que geraram essa economia.`,
+      });
+    }
+  }
+
+  return insights;
+}
+
+/* ---------------------------------------------------------------
+   ROBÔ DE IMPORTAÇÃO — palavras-chave e parsing
+--------------------------------------------------------------- */
+const PALAVRAS_RECEITA_SALARIO = ["salário", "salario", "holerite", "contracheque", "pagamento do mês", "pagamento do mes"];
+const PALAVRAS_RECEITA_EXTRA = [
+  "bônus", "bonus", "freela", "freelance", "reembolso", "restituição", "restituicao",
+  "prêmio", "premio", "13º", "decimo terceiro", "décimo terceiro", "venda de", "vendi",
+  "presente em dinheiro", "rendimento", "cashback",
+];
+const PALAVRAS_RECEITA_GENERICA = ["recebi", "recebido", "recebimento", "depósito", "deposito", "pix recebido", "caiu na conta"];
+
+const MAPA_PALAVRAS_CATEGORIA = {
+  moradia: ["aluguel", "condomínio", "condominio", "iptu", "reforma"],
+  alimentacao: ["mercado", "supermercado", "ifood", "restaurante", "padaria", "feira", "lanche", "almoço", "almoco", "jantar"],
+  transporte: ["uber", "99", "combustível", "combustivel", "gasolina", "ônibus", "onibus", "estacionamento", "pedágio", "pedagio", "passagem"],
+  saude: ["farmácia", "farmacia", "consulta", "médico", "medico", "plano de saúde", "plano de saude", "dentista", "exame", "remédio", "remedio"],
+  educacao: ["escola", "faculdade", "curso", "mensalidade", "material escolar", "livro"],
+  lazer: ["cinema", "netflix", "spotify", "viagem", "show", "streaming", "passeio", "bar", "balada"],
+  contas: ["luz", "água", "agua", "internet", "telefone", "celular", "gás", "gas", "boleto", "fatura"],
+};
+
+function extrairValor(linha) {
+  let m = linha.match(/r\$\s*([\d.]*\d(?:,\d{2})?)/i);
+  if (!m) m = linha.match(/(\d{1,3}(?:\.\d{3})+,\d{2})/);
+  if (!m) m = linha.match(/(\d+,\d{2})/);
+  if (!m) m = linha.match(/\b(\d+)\b/);
+  if (!m) return null;
+  let raw = m[1].replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
+  const val = parseFloat(raw);
+  return isNaN(val) || val <= 0 ? null : val;
+}
+
+function extrairMes(linha, mesPadrao) {
+  const m = linha.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+  if (!m) return mesPadrao;
+  const mes = parseInt(m[2], 10);
+  if (mes < 1 || mes > 12) return mesPadrao;
+  const ano = m[3] ? (m[3].length === 2 ? 2000 + parseInt(m[3], 10) : parseInt(m[3], 10)) : parseInt(mesPadrao.split("-")[0], 10);
+  return `${ano}-${String(mes).padStart(2, "0")}`;
+}
+
+function classificarLinha(linha, categorias) {
+  const l = linha.toLowerCase();
+  if (PALAVRAS_RECEITA_SALARIO.some((k) => l.includes(k))) return { destino: "salario" };
+  if (PALAVRAS_RECEITA_EXTRA.some((k) => l.includes(k))) return { destino: "extra" };
+  if (PALAVRAS_RECEITA_GENERICA.some((k) => l.includes(k))) return { destino: "extra" };
+
+  for (const [id, palavras] of Object.entries(MAPA_PALAVRAS_CATEGORIA)) {
+    if (palavras.some((p) => l.includes(p))) {
+      const existente = categorias.find((c) => c.id === id);
+      if (existente) return { destino: "despesa", categoriaId: existente.id };
+    }
+  }
+  const outros = categorias.find((c) => c.id === "outros") || categorias[categorias.length - 1];
+  return { destino: "despesa", categoriaId: outros?.id || categorias[0]?.id };
+}
+
+function analisarTexto(texto, categorias, mesPadrao) {
+  return texto
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((linha) => {
+      const valor = extrairValor(linha);
+      if (valor === null) return null;
+      const mes = extrairMes(linha, mesPadrao);
+      const classificacao = classificarLinha(linha, categorias);
+      return {
+        id: uid(),
+        incluir: true,
+        original: linha,
+        valor,
+        mes,
+        destino: classificacao.destino,
+        categoriaId: classificacao.categoriaId || categorias[0]?.id || "",
+        pessoa: "",
+        descricao: linha,
+      };
+    })
+    .filter(Boolean);
+}
+
+/* ---------------------------------------------------------------
+   ABA: DASHBOARD
+--------------------------------------------------------------- */
+function Dashboard({ dados, mes, setMes }) {
+  const calc = useCalculos(dados, mes);
+  const insights = gerarInsights(calc, mes);
+
+  const iconePorTipo = { alerta: AlertTriangle, positivo: CheckCircle2, info: Lightbulb };
+  const corPorTipo = { alerta: C.danger, positivo: C.positive, info: C.accent };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2 className="text-xl font-semibold" style={{ fontFamily: "Fraunces, serif", color: C.ink }}>
+          Painel do mês
+        </h2>
+        <SeletorMes mes={mes} setMes={setMes} />
+      </div>
+
+      {/* cards resumo */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Cartao style={{ padding: 18 }}>
+          <div className="flex items-center gap-2 mb-2" style={{ color: C.inkMuted }}>
+            <TrendingUp size={16} />
+            <span className="text-xs font-semibold uppercase tracking-wide">Receitas</span>
+          </div>
+          <Numero valor={calc.totalReceitas} cor={C.primary} tamanho="text-2xl" />
+          <div className="text-xs mt-1" style={{ color: C.inkFaint, fontFamily: "Inter, sans-serif" }}>
+            Salários {formatBRL(calc.totalSalarios)} · Extras {formatBRL(calc.totalExtras)}
+          </div>
+        </Cartao>
+        <Cartao style={{ padding: 18 }}>
+          <div className="flex items-center gap-2 mb-2" style={{ color: C.inkMuted }}>
+            <TrendingDown size={16} />
+            <span className="text-xs font-semibold uppercase tracking-wide">Despesas</span>
+          </div>
+          <Numero valor={calc.totalDespesas} cor={C.danger} tamanho="text-2xl" />
+          {calc.variacaoDespesas !== null && (
+            <div className="text-xs mt-1" style={{ color: C.inkFaint, fontFamily: "Inter, sans-serif" }}>
+              {calc.variacaoDespesas >= 0 ? "▲" : "▼"} {Math.abs(calc.variacaoDespesas).toFixed(0)}% vs. mês anterior
+            </div>
+          )}
+        </Cartao>
+        <Cartao style={{ padding: 18, background: calc.saldo < 0 ? C.dangerSoft : C.accentSoft }}>
+          <div className="flex items-center gap-2 mb-2" style={{ color: C.inkMuted }}>
+            <Wallet size={16} />
+            <span className="text-xs font-semibold uppercase tracking-wide">Saldo do mês</span>
+          </div>
+          <Numero valor={calc.saldo} cor={calc.saldo < 0 ? C.danger : C.primaryDark} tamanho="text-2xl" />
+        </Cartao>
+      </div>
+
+      {/* gráficos */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        <Cartao style={{ padding: 18 }} className="lg:col-span-2">
+          <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+            Gastos por categoria
+          </h3>
+          {calc.porCategoria.length === 0 ? (
+            <p className="text-sm py-10 text-center" style={{ color: C.inkFaint }}>Sem despesas neste mês</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={230}>
+              <PieChart>
+                <Pie
+                  data={calc.porCategoria}
+                  dataKey="total"
+                  nameKey="nome"
+                  innerRadius={50}
+                  outerRadius={85}
+                  paddingAngle={2}
+                >
+                  {calc.porCategoria.map((c) => (
+                    <Cell key={c.id} fill={c.cor} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v) => formatBRL(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 11, fontFamily: "Inter, sans-serif" }} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </Cartao>
+
+        <Cartao style={{ padding: 18 }} className="lg:col-span-3">
+          <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+            Receitas x Despesas (últimos 6 meses)
+          </h3>
+          <ResponsiveContainer width="100%" height={230}>
+            <BarChart data={calc.evolucao}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.line} />
+              <XAxis dataKey="mes" tick={{ fontSize: 11, fontFamily: "Inter, sans-serif" }} stroke={C.inkFaint} />
+              <YAxis tick={{ fontSize: 10, fontFamily: "Inter, sans-serif" }} stroke={C.inkFaint} />
+              <Tooltip formatter={(v) => formatBRL(v)} contentStyle={{ fontFamily: "Inter, sans-serif", fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 11, fontFamily: "Inter, sans-serif" }} />
+              <Bar dataKey="Receitas" fill={C.primary} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="Despesas" fill={C.danger} radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Cartao>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* maiores gastos */}
+        <Cartao style={{ padding: 18 }}>
+          <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+            Maiores gastos do mês
+          </h3>
+          {calc.maioresGastos.length === 0 ? (
+            <p className="text-sm py-6 text-center" style={{ color: C.inkFaint }}>Nenhuma despesa cadastrada</p>
+          ) : (
+            <div>
+              {calc.maioresGastos.map((d, i) => {
+                const cat = dados.categorias.find((c) => c.id === d.categoriaId);
+                return (
+                  <div
+                    key={d.id}
+                    className="flex items-center justify-between py-2"
+                    style={{ borderTop: i > 0 ? `1px solid ${C.line}` : "none" }}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: cat?.cor || C.inkFaint }} />
+                      <span className="text-sm truncate" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+                        {d.descricao || cat?.nome || "Despesa"}
+                      </span>
+                    </div>
+                    <Numero valor={d.valor} tamanho="text-sm" />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Cartao>
+
+        {/* insights */}
+        <Cartao style={{ padding: 18 }}>
+          <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+            Insights e plano de ação
+          </h3>
+          <div className="space-y-3">
+            {insights.map((ins, i) => {
+              const Icone = iconePorTipo[ins.tipo];
+              return (
+                <div key={i} className="flex gap-2 text-sm" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+                  <Icone size={16} className="flex-shrink-0 mt-0.5" style={{ color: corPorTipo[ins.tipo] }} />
+                  <span>{ins.texto}</span>
+                </div>
+              );
+            })}
+          </div>
+        </Cartao>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   ABA: DESPESAS
+--------------------------------------------------------------- */
+function Despesas({ dados, persistir, mes, setMes }) {
+  const [form, setForm] = useState({ valor: "", categoriaId: dados.categorias[0]?.id || "", descricao: "", mes });
+
+  useEffect(() => setForm((f) => ({ ...f, mes })), [mes]);
+
+  const despesasDoMes = dados.despesas
+    .filter((d) => d.mes === mes)
+    .sort((a, b) => b.valor - a.valor);
+
+  const adicionar = (e) => {
+    e.preventDefault();
+    if (!form.valor || Number(form.valor) <= 0 || !form.categoriaId) return;
+    const nova = { id: uid(), valor: Number(form.valor), categoriaId: form.categoriaId, descricao: form.descricao, mes: form.mes };
+    persistir({ ...dados, despesas: [...dados.despesas, nova] });
+    setForm({ valor: "", categoriaId: form.categoriaId, descricao: "", mes: form.mes });
+  };
+
+  const remover = (id) => {
+    persistir({ ...dados, despesas: dados.despesas.filter((d) => d.id !== id) });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2 className="text-xl font-semibold" style={{ fontFamily: "Fraunces, serif", color: C.ink }}>
+          Contas da família
+        </h2>
+        <SeletorMes mes={mes} setMes={setMes} />
+      </div>
+
+      <Cartao style={{ padding: 18 }}>
+        <form onSubmit={adicionar} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+          <div className="sm:col-span-1">
+            <Rotulo>Valor (R$)</Rotulo>
+            <Campo type="number" step="0.01" min="0" placeholder="0,00" value={form.valor}
+              onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+          </div>
+          <div className="sm:col-span-1">
+            <Rotulo>Categoria</Rotulo>
+            <Selecao value={form.categoriaId} onChange={(e) => setForm({ ...form, categoriaId: e.target.value })}>
+              {dados.categorias.map((c) => (<option key={c.id} value={c.id}>{c.nome}</option>))}
+            </Selecao>
+          </div>
+          <div className="sm:col-span-1">
+            <Rotulo>Mês de referência</Rotulo>
+            <Campo type="month" value={form.mes} onChange={(e) => setForm({ ...form, mes: e.target.value })} />
+          </div>
+          <div className="sm:col-span-1">
+            <Rotulo>Descrição (opcional)</Rotulo>
+            <Campo type="text" placeholder="Ex.: Conta de luz" value={form.descricao}
+              onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
+          </div>
+          <Botao type="submit"><PlusCircle size={16} />Adicionar</Botao>
+        </form>
+      </Cartao>
+
+      <Cartao style={{ padding: 18 }}>
+        <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+          Lançamentos de {rotuloMes(mes)} · Total {formatBRL(despesasDoMes.reduce((s, d) => s + d.valor, 0))}
+        </h3>
+        {despesasDoMes.length === 0 ? (
+          <p className="text-sm py-8 text-center" style={{ color: C.inkFaint }}>Nenhuma despesa cadastrada para este mês</p>
+        ) : (
+          despesasDoMes.map((d, i) => {
+            const cat = dados.categorias.find((c) => c.id === d.categoriaId);
+            return (
+              <div key={d.id} className="flex items-center justify-between py-2.5"
+                style={{ borderTop: i > 0 ? `1px solid ${C.line}` : "none" }}>
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-xs px-2 py-1 rounded-full flex-shrink-0"
+                    style={{ background: `${cat?.cor}22`, color: cat?.cor, fontFamily: "Inter, sans-serif" }}>
+                    {cat?.nome || "Sem categoria"}
+                  </span>
+                  <span className="text-sm truncate" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+                    {d.descricao || "—"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <Numero valor={d.valor} tamanho="text-sm" />
+                  <button onClick={() => remover(d.id)} style={{ color: C.inkFaint }} className="hover:opacity-70">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </Cartao>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   ABA: CATEGORIAS
+--------------------------------------------------------------- */
+function Categorias({ dados, persistir }) {
+  const [nome, setNome] = useState("");
+  const [cor, setCor] = useState(PALETTE_CORES[0]);
+
+  const adicionar = (e) => {
+    e.preventDefault();
+    if (!nome.trim()) return;
+    const nova = { id: uid(), nome: nome.trim(), cor };
+    persistir({ ...dados, categorias: [...dados.categorias, nova] });
+    setNome("");
+  };
+
+  const remover = (id) => {
+    const emUso = dados.despesas.some((d) => d.categoriaId === id);
+    if (emUso && !confirm("Essa categoria tem despesas associadas. As despesas continuarão salvas, mas ficarão sem categoria visível. Remover mesmo assim?")) return;
+    persistir({ ...dados, categorias: dados.categorias.filter((c) => c.id !== id) });
+  };
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-semibold" style={{ fontFamily: "Fraunces, serif", color: C.ink }}>
+        Categorias de gastos
+      </h2>
+
+      <Cartao style={{ padding: 18 }}>
+        <form onSubmit={adicionar} className="flex flex-wrap items-end gap-3">
+          <div className="flex-1 min-w-[180px]">
+            <Rotulo>Nova categoria</Rotulo>
+            <Campo type="text" placeholder="Ex.: Pet, Viagens..." value={nome} onChange={(e) => setNome(e.target.value)} />
+          </div>
+          <div>
+            <Rotulo>Cor</Rotulo>
+            <div className="flex gap-1.5">
+              {PALETTE_CORES.map((c) => (
+                <button key={c} type="button" onClick={() => setCor(c)}
+                  className="w-7 h-7 rounded-full"
+                  style={{ background: c, border: cor === c ? `2px solid ${C.ink}` : "2px solid transparent" }} />
+              ))}
+            </div>
+          </div>
+          <Botao type="submit"><PlusCircle size={16} />Adicionar</Botao>
+        </form>
+      </Cartao>
+
+      <Cartao style={{ padding: 18 }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {dados.categorias.map((c) => {
+            const totalGasto = dados.despesas.filter((d) => d.categoriaId === c.id).reduce((s, d) => s + Number(d.valor), 0);
+            return (
+              <div key={c.id} className="flex items-center justify-between rounded-md px-3 py-2.5" style={{ background: C.bg }}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: c.cor }} />
+                  <span className="text-sm font-medium truncate" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>{c.nome}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs" style={{ color: C.inkFaint, fontFamily: "'IBM Plex Mono', monospace" }}>
+                    {totalGasto > 0 ? formatBRL(totalGasto) : ""}
+                  </span>
+                  <button onClick={() => remover(c.id)} style={{ color: C.inkFaint }} className="hover:opacity-70">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Cartao>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   ABA: SALÁRIOS
+--------------------------------------------------------------- */
+function Salarios({ dados, persistir, mes, setMes }) {
+  const [form, setForm] = useState({ pessoa: "", valor: "", mes });
+  useEffect(() => setForm((f) => ({ ...f, mes })), [mes]);
+
+  const doMes = dados.salarios.filter((s) => s.mes === mes);
+
+  const adicionar = (e) => {
+    e.preventDefault();
+    if (!form.pessoa.trim() || !form.valor || Number(form.valor) <= 0) return;
+    const novo = { id: uid(), pessoa: form.pessoa.trim(), valor: Number(form.valor), mes: form.mes };
+    persistir({ ...dados, salarios: [...dados.salarios, novo] });
+    setForm({ pessoa: "", valor: "", mes: form.mes });
+  };
+
+  const remover = (id) => persistir({ ...dados, salarios: dados.salarios.filter((s) => s.id !== id) });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2 className="text-xl font-semibold" style={{ fontFamily: "Fraunces, serif", color: C.ink }}>
+          Salários da família
+        </h2>
+        <SeletorMes mes={mes} setMes={setMes} />
+      </div>
+
+      <Cartao style={{ padding: 18 }}>
+        <form onSubmit={adicionar} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div className="sm:col-span-2">
+            <Rotulo>Quem recebeu</Rotulo>
+            <Campo type="text" placeholder="Ex.: João" value={form.pessoa} onChange={(e) => setForm({ ...form, pessoa: e.target.value })} />
+          </div>
+          <div>
+            <Rotulo>Valor (R$)</Rotulo>
+            <Campo type="number" step="0.01" min="0" placeholder="0,00" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+          </div>
+          <Botao type="submit"><PlusCircle size={16} />Adicionar</Botao>
+        </form>
+      </Cartao>
+
+      <Cartao style={{ padding: 18 }}>
+        <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+          Recebidos em {rotuloMes(mes)} · Total {formatBRL(doMes.reduce((s, d) => s + d.valor, 0))}
+        </h3>
+        {doMes.length === 0 ? (
+          <p className="text-sm py-8 text-center" style={{ color: C.inkFaint }}>Nenhum salário cadastrado para este mês</p>
+        ) : (
+          doMes.map((s, i) => (
+            <div key={s.id} className="flex items-center justify-between py-2.5" style={{ borderTop: i > 0 ? `1px solid ${C.line}` : "none" }}>
+              <span className="text-sm" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>{s.pessoa}</span>
+              <div className="flex items-center gap-3">
+                <Numero valor={s.valor} tamanho="text-sm" cor={C.primary} />
+                <button onClick={() => remover(s.id)} style={{ color: C.inkFaint }} className="hover:opacity-70"><Trash2 size={15} /></button>
+              </div>
+            </div>
+          ))
+        )}
+      </Cartao>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   ABA: SALDOS EXTRAS
+--------------------------------------------------------------- */
+function Extras({ dados, persistir, mes, setMes }) {
+  const [form, setForm] = useState({ descricao: "", valor: "", mes });
+  useEffect(() => setForm((f) => ({ ...f, mes })), [mes]);
+
+  const doMes = dados.extras.filter((e) => e.mes === mes);
+
+  const adicionar = (e) => {
+    e.preventDefault();
+    if (!form.descricao.trim() || !form.valor || Number(form.valor) <= 0) return;
+    const novo = { id: uid(), descricao: form.descricao.trim(), valor: Number(form.valor), mes: form.mes };
+    persistir({ ...dados, extras: [...dados.extras, novo] });
+    setForm({ descricao: "", valor: "", mes: form.mes });
+  };
+
+  const remover = (id) => persistir({ ...dados, extras: dados.extras.filter((e) => e.id !== id) });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2 className="text-xl font-semibold" style={{ fontFamily: "Fraunces, serif", color: C.ink }}>
+          Entradas extras
+        </h2>
+        <SeletorMes mes={mes} setMes={setMes} />
+      </div>
+      <p className="text-sm -mt-3" style={{ color: C.inkMuted, fontFamily: "Inter, sans-serif" }}>
+        Valores avulsos (bônus, freelas, vendas, presentes em dinheiro...) que entram na composição do orçamento daquele mês.
+      </p>
+
+      <Cartao style={{ padding: 18 }}>
+        <form onSubmit={adicionar} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div className="sm:col-span-2">
+            <Rotulo>Descrição / origem</Rotulo>
+            <Campo type="text" placeholder="Ex.: Freelance, 13º, venda usado..." value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
+          </div>
+          <div>
+            <Rotulo>Valor (R$)</Rotulo>
+            <Campo type="number" step="0.01" min="0" placeholder="0,00" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+          </div>
+          <Botao type="submit" variant="accent"><PlusCircle size={16} />Adicionar</Botao>
+        </form>
+      </Cartao>
+
+      <Cartao style={{ padding: 18 }}>
+        <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+          Entradas de {rotuloMes(mes)} · Total {formatBRL(doMes.reduce((s, d) => s + d.valor, 0))}
+        </h3>
+        {doMes.length === 0 ? (
+          <p className="text-sm py-8 text-center" style={{ color: C.inkFaint }}>Nenhuma entrada extra cadastrada para este mês</p>
+        ) : (
+          doMes.map((ex, i) => (
+            <div key={ex.id} className="flex items-center justify-between py-2.5" style={{ borderTop: i > 0 ? `1px solid ${C.line}` : "none" }}>
+              <span className="text-sm" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>{ex.descricao}</span>
+              <div className="flex items-center gap-3">
+                <Numero valor={ex.valor} tamanho="text-sm" cor={C.accent} />
+                <button onClick={() => remover(ex.id)} style={{ color: C.inkFaint }} className="hover:opacity-70"><Trash2 size={15} /></button>
+              </div>
+            </div>
+          ))
+        )}
+      </Cartao>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   ABA: ROBÔ DE IMPORTAÇÃO
+--------------------------------------------------------------- */
+function Robo({ dados, persistir, mes }) {
+  const [texto, setTexto] = useState("");
+  const [itens, setItens] = useState(null);
+
+  const analisar = () => {
+    if (!texto.trim()) return;
+    setItens(analisarTexto(texto, dados.categorias, mes));
+  };
+
+  const atualizarItem = (id, campo, valor) => {
+    setItens((prev) => prev.map((it) => (it.id === id ? { ...it, [campo]: valor } : it)));
+  };
+
+  const removerItem = (id) => setItens((prev) => prev.filter((it) => it.id !== id));
+
+  const selecionados = itens ? itens.filter((it) => it.incluir) : [];
+
+  const confirmarImportacao = () => {
+    if (!selecionados.length) return;
+    const novasDespesas = [];
+    const novosSalarios = [];
+    const novosExtras = [];
+    selecionados.forEach((it) => {
+      if (it.destino === "despesa") {
+        novasDespesas.push({ id: uid(), valor: Number(it.valor), categoriaId: it.categoriaId, descricao: it.descricao, mes: it.mes });
+      } else if (it.destino === "salario") {
+        novosSalarios.push({ id: uid(), pessoa: it.pessoa || "Não identificado", valor: Number(it.valor), mes: it.mes });
+      } else if (it.destino === "extra") {
+        novosExtras.push({ id: uid(), descricao: it.descricao, valor: Number(it.valor), mes: it.mes });
+      }
+    });
+    persistir({
+      ...dados,
+      despesas: [...dados.despesas, ...novasDespesas],
+      salarios: [...dados.salarios, ...novosSalarios],
+      extras: [...dados.extras, ...novosExtras],
+    });
+    setTexto("");
+    setItens(null);
+  };
+
+  const rotuloDestino = { despesa: "Despesa", salario: "Salário", extra: "Extra" };
+  const corDestino = { despesa: C.danger, salario: C.primary, extra: C.accent };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold flex items-center gap-2" style={{ fontFamily: "Fraunces, serif", color: C.ink }}>
+          <Bot size={22} style={{ color: C.accent }} /> Robô de lançamentos
+        </h2>
+        <p className="text-sm mt-1" style={{ color: C.inkMuted, fontFamily: "Inter, sans-serif" }}>
+          Cole um texto com um lançamento por linha. Palavras como "salário" viram receita fixa, "freela", "bônus" ou "recebi" viram entrada extra, e o resto entra como despesa — a categoria é sugerida pelo conteúdo da linha.
+        </p>
+      </div>
+
+      <Cartao style={{ padding: 18 }}>
+        <Rotulo>Texto para analisar</Rotulo>
+        <textarea
+          value={texto}
+          onChange={(e) => setTexto(e.target.value)}
+          rows={6}
+          placeholder={"Mercado Extra R$ 187,40\nPaguei conta de luz 210,00 dia 05/07\nRecebi salário 3200\nFreela site R$ 450,00"}
+          className="w-full rounded-md px-3 py-2 text-sm outline-none"
+          style={{ ...inputStyle, resize: "vertical" }}
+        />
+        <div className="mt-3 flex justify-end">
+          <Botao onClick={analisar} variant="accent"><Sparkles size={16} />Analisar texto</Botao>
+        </div>
+      </Cartao>
+
+      {itens && (
+        <Cartao style={{ padding: 18 }}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+              {itens.length === 0 ? "Nenhum valor identificado no texto" : `${itens.length} lançamento(s) identificado(s) — revise antes de confirmar`}
+            </h3>
+            {itens.length > 0 && (
+              <Botao onClick={confirmarImportacao} disabled={!selecionados.length}>
+                <CheckCircle2 size={16} />Adicionar {selecionados.length} selecionado(s)
+              </Botao>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            {itens.map((it) => (
+              <div key={it.id} className="rounded-md p-3" style={{ background: C.bg, border: `1px solid ${C.line}` }}>
+                <div className="flex items-start gap-2 mb-2">
+                  <input type="checkbox" checked={it.incluir} onChange={(e) => atualizarItem(it.id, "incluir", e.target.checked)} className="mt-1" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs truncate" style={{ color: C.inkFaint, fontFamily: "'IBM Plex Mono', monospace" }}>"{it.original}"</p>
+                  </div>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0" style={{ background: `${corDestino[it.destino]}22`, color: corDestino[it.destino] }}>
+                    {rotuloDestino[it.destino]}
+                  </span>
+                  <button onClick={() => removerItem(it.id)} style={{ color: C.inkFaint }} className="hover:opacity-70 flex-shrink-0"><X size={15} /></button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  <div>
+                    <Rotulo>Tipo</Rotulo>
+                    <Selecao value={it.destino} onChange={(e) => atualizarItem(it.id, "destino", e.target.value)}>
+                      <option value="despesa">Despesa</option>
+                      <option value="salario">Salário</option>
+                      <option value="extra">Extra</option>
+                    </Selecao>
+                  </div>
+                  <div>
+                    <Rotulo>Valor</Rotulo>
+                    <Campo type="number" step="0.01" value={it.valor} onChange={(e) => atualizarItem(it.id, "valor", e.target.value)} />
+                  </div>
+                  <div>
+                    <Rotulo>Mês</Rotulo>
+                    <Campo type="month" value={it.mes} onChange={(e) => atualizarItem(it.id, "mes", e.target.value)} />
+                  </div>
+                  {it.destino === "despesa" && (
+                    <div>
+                      <Rotulo>Categoria</Rotulo>
+                      <Selecao value={it.categoriaId} onChange={(e) => atualizarItem(it.id, "categoriaId", e.target.value)}>
+                        {dados.categorias.map((c) => (<option key={c.id} value={c.id}>{c.nome}</option>))}
+                      </Selecao>
+                    </div>
+                  )}
+                  {it.destino === "salario" && (
+                    <div>
+                      <Rotulo>Quem recebeu</Rotulo>
+                      <Campo type="text" placeholder="Nome" value={it.pessoa} onChange={(e) => atualizarItem(it.id, "pessoa", e.target.value)} />
+                    </div>
+                  )}
+                  <div className={it.destino === "extra" ? "col-span-2 sm:col-span-2" : ""}>
+                    <Rotulo>Descrição</Rotulo>
+                    <Campo type="text" value={it.descricao} onChange={(e) => atualizarItem(it.id, "descricao", e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Cartao>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   APP
+--------------------------------------------------------------- */
+const ABAS = [
+  { id: "dashboard", nome: "Painel", icone: LayoutDashboard },
+  { id: "robo", nome: "Robô", icone: Bot },
+  { id: "despesas", nome: "Contas", icone: Receipt },
+  { id: "categorias", nome: "Categorias", icone: Tag },
+  { id: "salarios", nome: "Salários", icone: Users },
+  { id: "extras", nome: "Extras", icone: Gift },
+];
+
+function App() {
+  const { dados, persistir, carregando, erro } = useDados();
+  const [aba, setAba] = useState("dashboard");
+  const [mes, setMes] = useState(mesAtual);
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+        * { box-sizing: border-box; }
+        ::selection { background: ${C.accentSoft}; }
+      `}</style>
+
+      {/* cabeçalho */}
+      <header style={{ background: C.primaryDark, borderBottom: `1px solid ${C.line}` }}>
+        <div className="max-w-6xl mx-auto px-5 py-5 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div
+              className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ border: `2px dashed ${C.accent}`, color: C.accent }}
+            >
+              <span style={{ fontFamily: "Fraunces, serif", fontWeight: 600, fontSize: 15 }}>FS</span>
+            </div>
+            <div>
+              <h1 style={{ fontFamily: "Fraunces, serif", fontWeight: 600, fontSize: 22, color: "#F5F7F2", lineHeight: 1.1 }}>
+                Financeiro Família Sousa
+              </h1>
+              <p style={{ color: "#B9C7BE", fontSize: 12 }}>Caderno de contas da família</p>
+            </div>
+          </div>
+          {erro && (
+            <div className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md" style={{ background: C.dangerSoft, color: C.danger }}>
+              <AlertTriangle size={14} /> Não foi possível salvar. Tente novamente.
+            </div>
+          )}
+        </div>
+      </header>
+
+      {/* navegação */}
+      <nav className="max-w-6xl mx-auto px-5">
+        <div className="flex gap-1 overflow-x-auto py-3">
+          {ABAS.map((a) => {
+            const Icone = a.icone;
+            const ativa = aba === a.id;
+            return (
+              <button
+                key={a.id}
+                onClick={() => setAba(a.id)}
+                className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors"
+                style={{
+                  background: ativa ? C.primary : "transparent",
+                  color: ativa ? "#F5F7F2" : C.inkMuted,
+                }}
+              >
+                <Icone size={15} /> {a.nome}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      <main className="max-w-6xl mx-auto px-5 pb-16">
+        {carregando ? (
+          <div className="py-24 text-center" style={{ color: C.inkFaint }}>Carregando dados da família...</div>
+        ) : (
+          <>
+            {aba === "dashboard" && <Dashboard dados={dados} mes={mes} setMes={setMes} />}
+            {aba === "robo" && <Robo dados={dados} persistir={persistir} mes={mes} />}
+            {aba === "despesas" && <Despesas dados={dados} persistir={persistir} mes={mes} setMes={setMes} />}
+            {aba === "categorias" && <Categorias dados={dados} persistir={persistir} />}
+            {aba === "salarios" && <Salarios dados={dados} persistir={persistir} mes={mes} setMes={setMes} />}
+            {aba === "extras" && <Extras dados={dados} persistir={persistir} mes={mes} setMes={setMes} />}
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const raiz = ReactDOM.createRoot(document.getElementById("root"));
+raiz.render(<App />);
+</script>
+</body>
+</html>
