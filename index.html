@@ -101,7 +101,7 @@ function mapearDoBanco({ categorias, despesas, salarios, extras, tarefas }) {
   return {
     categorias: categorias?.length ? categorias : DEFAULT_CATEGORIES,
     despesas: (despesas || []).map((d) => ({
-      id: d.id, valor: Number(d.valor), categoriaId: d.categoria_id, descricao: d.descricao || "", mes: d.mes,
+      id: d.id, valor: Number(d.valor), categoriaId: d.categoria_id, descricao: d.descricao || "", mes: d.mes, paga: !!d.paga,
     })),
     salarios: (salarios || []).map((s) => ({ id: s.id, pessoa: s.pessoa, valor: Number(s.valor), mes: s.mes })),
     extras: (extras || []).map((e) => ({ id: e.id, descricao: e.descricao, valor: Number(e.valor), mes: e.mes })),
@@ -208,7 +208,7 @@ function useDados() {
     try {
       await Promise.all([
         sincronizarTabela("categorias", antigos.categorias, novosDados.categorias, (c) => ({ id: c.id, nome: c.nome, cor: c.cor })),
-        sincronizarTabela("despesas", antigos.despesas, novosDados.despesas, (d) => ({ id: d.id, valor: d.valor, categoria_id: d.categoriaId, descricao: d.descricao, mes: d.mes })),
+        sincronizarTabela("despesas", antigos.despesas, novosDados.despesas, (d) => ({ id: d.id, valor: d.valor, categoria_id: d.categoriaId, descricao: d.descricao, mes: d.mes, paga: !!d.paga })),
         sincronizarTabela("salarios", antigos.salarios, novosDados.salarios, (s) => ({ id: s.id, pessoa: s.pessoa, valor: s.valor, mes: s.mes })),
         sincronizarTabela("extras", antigos.extras, novosDados.extras, (e) => ({ id: e.id, descricao: e.descricao, valor: e.valor, mes: e.mes })),
         sincronizarTabela("tarefas", antigos.tarefas, novosDados.tarefas, (t) => ({ id: t.id, titulo: t.titulo, data: t.data || null, prazo: t.prazo || null, valor: t.valor || 0, concluida: !!t.concluida })),
@@ -349,6 +349,8 @@ function useCalculos(dados, mes) {
     const extrasMes = dados.extras.filter((e) => e.mes === mes);
 
     const totalDespesas = despesasMes.reduce((s, d) => s + Number(d.valor), 0);
+    const totalPago = despesasMes.filter((d) => d.paga).reduce((s, d) => s + Number(d.valor), 0);
+    const totalAPagar = totalDespesas - totalPago;
     const totalSalarios = salariosMes.reduce((s, d) => s + Number(d.valor), 0);
     const totalExtras = extrasMes.reduce((s, d) => s + Number(d.valor), 0);
     const totalReceitas = totalSalarios + totalExtras;
@@ -390,7 +392,7 @@ function useCalculos(dados, mes) {
     });
 
     return {
-      despesasMes, salariosMes, extrasMes, totalDespesas, totalSalarios, totalExtras,
+      despesasMes, salariosMes, extrasMes, totalDespesas, totalPago, totalAPagar, totalSalarios, totalExtras,
       totalReceitas, saldo, porCategoria, maioresGastos, variacaoDespesas, evolucao,
     };
   }, [dados, mes]);
@@ -613,7 +615,7 @@ function Dashboard({ dados, mes, setMes }) {
       </div>
 
       {/* cards resumo */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Cartao style={{ padding: 18 }}>
           <div className="flex items-center gap-2 mb-2" style={{ color: C.inkMuted }}>
             <TrendingUp size={16} />
@@ -633,6 +635,21 @@ function Dashboard({ dados, mes, setMes }) {
           {calc.variacaoDespesas !== null && (
             <div className="text-xs mt-1" style={{ color: C.inkFaint, fontFamily: "Inter, sans-serif" }}>
               {calc.variacaoDespesas >= 0 ? "▲" : "▼"} {Math.abs(calc.variacaoDespesas).toFixed(0)}% vs. mês anterior
+            </div>
+          )}
+        </Cartao>
+        <Cartao style={{ padding: 18 }}>
+          <div className="flex items-center gap-2 mb-2" style={{ color: C.inkMuted }}>
+            <CheckCircle2 size={16} />
+            <span className="text-xs font-semibold uppercase tracking-wide">Contas pagas</span>
+          </div>
+          <Numero valor={calc.totalPago} cor={C.positive} tamanho="text-2xl" />
+          <div className="text-xs mt-1" style={{ color: C.inkFaint, fontFamily: "Inter, sans-serif" }}>
+            Falta pagar <span style={{ color: C.danger, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>{formatBRL(calc.totalAPagar)}</span>
+          </div>
+          {calc.totalDespesas > 0 && (
+            <div className="mt-2" style={{ background: C.line, borderRadius: 9999, height: 6, overflow: "hidden" }}>
+              <div style={{ width: `${Math.min(100, (calc.totalPago / calc.totalDespesas) * 100)}%`, background: C.positive, height: "100%" }} />
             </div>
           )}
         </Cartao>
@@ -771,6 +788,13 @@ function Despesas({ dados, persistir, mes, setMes }) {
     persistir({ ...dados, despesas: dados.despesas.filter((d) => d.id !== id) });
   };
 
+  const alternarPaga = (id) => {
+    persistir({
+      ...dados,
+      despesas: dados.despesas.map((d) => (d.id === id ? { ...d, paga: !d.paga } : d)),
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -809,6 +833,10 @@ function Despesas({ dados, persistir, mes, setMes }) {
       <Cartao style={{ padding: 18 }}>
         <h3 className="text-sm font-semibold mb-3" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
           Lançamentos de {rotuloMes(mes)} · Total {formatBRL(despesasDoMes.reduce((s, d) => s + d.valor, 0))}
+          {" · "}
+          <span style={{ color: C.positive }}>
+            Pago {formatBRL(despesasDoMes.filter((d) => d.paga).reduce((s, d) => s + d.valor, 0))}
+          </span>
         </h3>
         {despesasDoMes.length === 0 ? (
           <p className="text-sm py-8 text-center" style={{ color: C.inkFaint }}>Nenhuma despesa cadastrada para este mês</p>
@@ -819,11 +847,19 @@ function Despesas({ dados, persistir, mes, setMes }) {
               <div key={d.id} className="flex items-center justify-between py-2.5"
                 style={{ borderTop: i > 0 ? `1px solid ${C.line}` : "none" }}>
                 <div className="flex items-center gap-3 min-w-0">
+                  <button
+                    onClick={() => alternarPaga(d.id)}
+                    title={d.paga ? "Marcar como não paga" : "Marcar como paga"}
+                    style={{ color: d.paga ? C.positive : C.inkFaint }}
+                    className="flex-shrink-0 hover:opacity-70"
+                  >
+                    {d.paga ? <CheckCircle2 size={18} /> : <Circle size={18} />}
+                  </button>
                   <span className="text-xs px-2 py-1 rounded-full flex-shrink-0"
                     style={{ background: `${cat?.cor}22`, color: cat?.cor, fontFamily: "Inter, sans-serif" }}>
                     {cat?.nome || "Sem categoria"}
                   </span>
-                  <span className="text-sm truncate" style={{ color: C.ink, fontFamily: "Inter, sans-serif" }}>
+                  <span className="text-sm truncate" style={{ color: C.ink, fontFamily: "Inter, sans-serif", textDecoration: d.paga ? "line-through" : "none" }}>
                     {d.descricao || "—"}
                   </span>
                 </div>

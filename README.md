@@ -11,6 +11,7 @@ api/notificar.js       -> função de servidor que envia o e-mail diário de tar
 vercel.json             -> aponta as rotas e agenda o cron do e-mail
 schema_supabase.sql     -> cria categorias/despesas/salários/extras no banco
 schema_tarefas.sql      -> cria a tabela de tarefas no banco
+schema_paga.sql         -> adiciona o campo de "conta paga" nas despesas
 ```
 
 Suba **todos** esses arquivos e pastas para a raiz do repositório no GitHub (mantendo `api/notificar.js` dentro da pasta `api`).
@@ -20,6 +21,7 @@ Suba **todos** esses arquivos e pastas para a raiz do repositório no GitHub (ma
 No **SQL Editor** do seu projeto Supabase, rode nessa ordem:
 1. `schema_supabase.sql` (se ainda não rodou)
 2. `schema_tarefas.sql`
+3. `schema_paga.sql` (adiciona o controle de "conta paga")
 
 A URL do projeto e a chave pública já estão embutidas no `index.html` e no `api/notificar.js` — são chaves seguras para expor (a proteção real são as políticas de RLS).
 

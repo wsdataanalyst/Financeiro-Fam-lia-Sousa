@@ -38,6 +38,7 @@ body { margin: 0; }
 .-mt-3 { margin-top: -.75rem; }
 .mt-0\.5 { margin-top: .125rem; }
 .mt-1 { margin-top: .25rem; }
+.mt-2 { margin-top: .5rem; }
 .mt-3 { margin-top: .75rem; }
 .mt-4 { margin-top: 1rem; }
 .mb-1 { margin-bottom: .25rem; }
@@ -127,5 +128,6 @@ body { margin: 0; }
   .lg\:col-span-2 { grid-column: span 2 / span 2; }
   .lg\:col-span-3 { grid-column: span 3 / span 3; }
   .lg\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lg\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .lg\:grid-cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
